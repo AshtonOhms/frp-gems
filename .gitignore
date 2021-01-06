@@ -1,0 +1,8 @@
+.stack-work/
+*~
+*.lock
+*.dll
+LICENSE.*.txt
+README-SDL.txt
+reactive-banana/
+Cascadia.ttf

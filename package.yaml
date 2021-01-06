@@ -1,0 +1,57 @@
+name:                frp-gems
+version:             0.1.0.0
+github:              "githubuser/frp-gems"
+license:             BSD3
+author:              "Author name here"
+maintainer:          "example@example.com"
+copyright:           "2020 Author name here"
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+# Metadata used when publishing your package
+# synopsis:            Short description of your package
+# category:            Web
+
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         Please see the README on GitHub at <https://github.com/githubuser/frp-gems#readme>
+
+dependencies:
+- base >= 4.7 && < 5
+- sdl2 >= 2.5.3.0 && <2.5.4
+- sdl2-ttf >= 2.1.1 && <2.2
+- text >=1.2.4.0 && <=1.2.5
+- linear >=1.21.3 && <1.22
+- matrix >= 0.3.6.1 && <0.3.7
+- vector >= 0.12.1.2 && < 0.12.2
+- random >= 1.1 && < 1.2
+#- unordered-containers >= 0.2.13.0 && <0.2.14
+- reactive-banana
+
+library:
+  source-dirs: src
+
+executables:
+  frp-gems-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - frp-gems
+
+tests:
+  frp-gems-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - frp-gems
