@@ -18,6 +18,7 @@ import qualified SDL.Font
 import qualified Data.Matrix as M
 import qualified Data.Text as Text
 import Data.List
+import Data.Maybe
 
 import Linear 
 
@@ -119,7 +120,7 @@ renderCell renderer gameMode ((x, y), GemCell gem) = do
     alpha' change animProgress = case change of
                       VanishGems coords ->
                         if any (==cellCoord) coords then -- TODO THIS IS SLOW!
-                          floor (255 * (1 - animProgress))
+                          floor (255 * (max 0 $ 1 - animProgress))
                         else 255
                       _ -> 255
     alpha = case gameMode of
@@ -152,13 +153,15 @@ gemAnimPos (SwapGems left right) animProgress cellCoord
   | otherwise = gemBasePos cellCoord
   where leftPos = fromIntegral <$> (gemBasePos left) :: V2 Float
         rightPos = fromIntegral <$> (gemBasePos right) :: V2 Float
-gemAnimPos (SettleGems coords) animProgress cellCoord
+gemAnimPos (SettleGems settlements _) animProgress cellCoord
   -- TODO VVV THIS IS SLOW VVV 
-  | any (==coordBelow) coords = round <$> (lerp animProgress bottomPos topPos )
+  | isJust matchingSettlement = round <$> (lerp animProgress bottomPos topPos )
   | otherwise = gemBasePos cellCoord
-  where coordBelow = cellCoord ^+^ V2 0 1
+  where coordBelow = cellCoord ^+^ (V2 0 $ fromMaybe 0 toFall)
         topPos = fromIntegral <$> gemBasePos cellCoord
         bottomPos = fromIntegral <$> gemBasePos coordBelow
+        toFall = snd <$> matchingSettlement
+        matchingSettlement = find (\(coord, _) -> coord == cellCoord) settlements
 gemAnimPos _ _ cellCoord = gemBasePos cellCoord
 
 gemPos :: GameMode -> CellCoords -> V2 Int
@@ -172,12 +175,12 @@ drawDebugInfo renderer font gameMode = do
   let
     modeText = case gameMode of
       Inputting _ -> "Inputting"
-      Changing (SwapGems _ _) animProgress -> "Changing SwapGems" ++ show animProgress
-      Changing (VanishGems _) animProgress -> "Changing VanishGems" ++ show animProgress
-      Changing (SettleGems _) animProgress -> "Changing SettleGems" ++ show animProgress
-      Applying (SwapGems _ _) -> "Applying SwapGems"
-      Applying (VanishGems _) -> "Applying VanishGems"
-      Applying (SettleGems _) -> "Applying SettleGems"
+      Changing (SwapGems _ _) animProgress -> "Changing\nSwapGems\n" ++ show animProgress
+      Changing (VanishGems _) animProgress -> "Changing\nVanishGems\n" ++ show animProgress
+      Changing (SettleGems _ _) animProgress -> "Changing\nSettleGems\n" ++ show animProgress
+      Applying (SwapGems _ _) -> "Applying\nSwapGems"
+      Applying (VanishGems _) -> "Applying\nVanishGems"
+      Applying (SettleGems _ _) -> "Applying\nSettleGems"
       Evaluating -> "Evaluating"
 
     textColor = V4 128 255 128 255
@@ -282,10 +285,15 @@ enumerate x = zip [0..] x
 --     where row = (v ! y) // [(x, cell)]
 
 
-genBoard :: RandomGen g => g -> MatrixBoard
-genBoard random = MatrixBoard $ intToGem <$> m
+genBoard :: MatrixBoard
+genBoard = MatrixBoard m
+  where m = M.fromList gridSize gridSize $ repeat EmptyCell
 
-  where m = M.fromList gridSize gridSize $ randomRs (1,5) random
+randomGems :: RandomGen g => Int -> g -> (g, [BoardCell])
+randomGems 0 random = (random, [])
+randomGems count random = (random'', (intToGem cell):cells)
+  where (cell, random'') = randomR (1,5) random'
+        (random', cells) = randomGems (count-1) random
 
         intToGem :: Int -> BoardCell
         intToGem 1 = GemCell Ruby
@@ -300,7 +308,7 @@ genBoard random = MatrixBoard $ intToGem <$> m
 data BoardChange = 
     SwapGems (CellCoords) (CellCoords)   -- coords of two gems to swap
   | VanishGems [CellCoords]              -- list of gems to vanish
-  | SettleGems [CellCoords] -- extents of gems to settle??
+  | SettleGems [(CellCoords, Int)] [BoardCell]-- gems to settle, by how much, new gems
 
 data InputState = InputState { mouseCoords :: SDL.Point V2 Int
                              , highlighted :: Maybe (V2 Int)
@@ -335,7 +343,9 @@ getHighlight (SDL.P v) =
     else
       Nothing
 
+-- TODO remove??
 toC (V2 x y) = (x, y)
+toV (x, y) = V2 x y
 
 applyBoardChange :: Board b => b -> BoardChange -> b
 applyBoardChange board (SwapGems (V2 x1 y1) (V2 x2 y2)) = 
@@ -344,11 +354,27 @@ applyBoardChange board (SwapGems (V2 x1 y1) (V2 x2 y2)) =
         leftCell = cell board (x2, y2)
         rightCell = cell board (x1, y1)
 applyBoardChange board (VanishGems gems) = foldl' (changeCell EmptyCell) board (map toC gems)
-applyBoardChange board (SettleGems coords) = foldl' changeCells board coords
-  where changeCells board coord = changeCell EmptyCell board' $ coordsAbove 
-          where board' = changeCell cellAbove board $ toC coord
-                cellAbove = cell board coordsAbove 
-                coordsAbove = toC $ coord ^-^ (V2 0 1)
+applyBoardChange board (SettleGems settlements newCells) = topOff newCells $ changeCells board $ reverse settlements -- this has to be reversed, otherwise extra cells will turn empty
+  where changeCells orig ((coords, toFall):settlements) = changeCell EmptyCell board' (toC coords)
+          where V2 column _ = coords
+                board' = changeCell gem board (toC newLoc)
+                newLoc = coords + (V2 0 toFall)
+                gem = cell orig (toC coords)
+                board = changeCells orig settlements
+        changeCells orig [] = orig
+
+        topOff newCells board = topOff' newCells board 1
+        topOff' newCells board col
+          | inBounds (V2 col 1) = topOff' newCells board' (col+1)
+          | otherwise = board
+          where board' = 
+                  if (cell board topCoord == EmptyCell) then
+                    changeCell newCell board topCoord
+                  else board
+                topCoord = (col, 1)
+                newCell = newCells !! (col-1)
+
+
 
 
 data Match = Match BoardCell Int
@@ -376,11 +402,17 @@ findBoardMatches board = (map toV $ concat coords, matches)
 pairs [] = []
 pairs xs = zip xs (tail xs)
 
-findGemsToSettle :: Board b => b -> [CellCoords]
+
+findGemsToSettle' :: Int -> [((Int, Int), BoardCell)] -> [(CellCoords, Int)]
+findGemsToSettle' emptyBelow ((_, EmptyCell):colRemain) = findGemsToSettle' (emptyBelow+1) colRemain
+findGemsToSettle' 0 ((coords, cell):colRemain) = findGemsToSettle' 0 colRemain
+findGemsToSettle' emptyBelow ((coords, cell):colRemain) = (toV coords, 1):findGemsToSettle' emptyBelow colRemain
+findGemsToSettle' _ [] = []
+
+
+findGemsToSettle :: Board b => b -> [(CellCoords, Int)]
 findGemsToSettle board = concat $ map coords $ rowItems board -- TODO this should be colItems...
-  where coords column = foldl' accum [] $ pairs column
-        accum coords (((_, GemCell _)), ((x, y), EmptyCell)) = (V2 x y):coords
-        accum coords _ = coords
+  where coords column = findGemsToSettle' 0 $ reverse column
 
 
 main :: IO ()
@@ -398,15 +430,15 @@ main = do
   eventSource <- getSDLEventSource
 
   let 
-    random = mkStdGen 0
+    initialRandom = mkStdGen 0
     initialInputState = InputState 
       { mouseCoords = SDL.P $ V2 0 0
       , highlighted = Nothing
       , selected = Nothing
       }
     initialState = GameState 
-      { board = genBoard random
-      , mode = Inputting initialInputState
+      { board = genBoard
+      , mode = Evaluating
       }
 
     networkDescription :: SDLEventSource -> R.MomentIO ()
@@ -418,6 +450,7 @@ main = do
         -- Behaviors derived from game state
         gameMode = mode <$> gameState
         boardB = board <$> gameState
+        randomGemsB = snd <$> randomSource
 
         inputState :: R.Behavior (Maybe InputState)
         inputState = maybeInputState <$> gameMode
@@ -517,14 +550,20 @@ main = do
         -- Emit this event when 
         vanishGemsE = VanishGems <$> (R.filterE (not . null) $ fst <$> findBoardMatches <$> (boardB R.<@ evalTick))
 
-        --settleGemsE = SettleGems <$> (R.filterE (not . null) $ findGemsToSettle <$> (boardB R.<@ evalTick))
+        hasEmptyCells board = any ((==EmptyCell) . snd) (items board)
 
+        gemsToSettleE = findGemsToSettle <$> (R.filterE hasEmptyCells $ boardB R.<@ evalTick)
+        settleGemsE = ((flip SettleGems) <$> randomGemsB) R.<@> gemsToSettleE
+
+        resetInput _ gameState = gameState { mode = Inputting initialInputState }
+        resetInputE = R.filterE (not . hasEmptyCells) $ boardB R.<@ evalTick
 
       gameState <- R.accumB initialState $ 
                      R.unions [ 
-                        --applyChangingMode <$> settleGemsE
                         applyBoardState <$> newBoardStateE
+                      , applyChangingMode <$> settleGemsE
                       , applyChangingMode <$> vanishGemsE
+                      , resetInput <$> resetInputE
                       , applyChangingMode <$> swap
                       , applyInputState <$> (R.whenE isInputting $ R.unions [
                           applySelected <$> selectedE
@@ -533,6 +572,10 @@ main = do
                         ])
                       , applyGameMode <$> updateChangingMode
                       ]
+
+      -- Get a new list of random gems and a new generator
+      let nextRandom _ (random, gems) = randomGems 10 random
+      randomSource <- R.accumB (randomGems 10 initialRandom) $ nextRandom <$> tick
 
       mousePosition <- R.stepper (SDL.P $ V2 0 0) mouseMove
 
@@ -544,7 +587,7 @@ main = do
   network <- R.compile $ networkDescription eventSource
   R.actuate network
 
-  sdlEventPump 10 eventSource
+  sdlEventPump 60 eventSource
 
   -- move ?
   SDL.Font.free font
