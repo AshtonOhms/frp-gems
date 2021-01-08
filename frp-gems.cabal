@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f909a09c8beda4d9c708c0e9666544620e78bf2bfeef9409a30d96a89e398a18
+-- hash: c01af08d0c87bb93879f8ee2388a36f498305bb1d45706ecea4eef4ab8c980e4
 
 name:           frp-gems
 version:        0.1.0.0
@@ -47,6 +47,9 @@ library
 executable frp-gems-exe
   main-is: Main.hs
   other-modules:
+      Model
+      Render
+      SDL.Adapter
       Paths_frp_gems
   hs-source-dirs:
       app

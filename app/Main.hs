@@ -12,282 +12,29 @@ module Main
     ( main
     ) where
 
+
+import Linear 
 import qualified SDL
 import qualified SDL.Font
-
-import qualified Data.Matrix as M
 import qualified Data.Text as Text
 import Data.List
 import Data.Maybe
-
-import Linear 
 
 --import Data.Vector hiding (map, mapM, zip, take, sequence, splitAt, concat) -- Todo qualify
 
 import System.Random
 import Data.Word
-import Control.Monad (when, liftM)
+
 import Foreign.C.Types (CInt)
 import qualified Reactive.Banana as R
 import qualified Reactive.Banana.Frameworks as R
 
-
--- Types
-type EventSource a = (R.AddHandler a, a -> IO ())
-
-addHandler :: EventSource a -> R.AddHandler a
-addHandler = fst
-
-fire :: EventSource a -> a -> IO ()
-fire = snd
-
-data SDLEventSource = SDLEventSource { getSDLEvent :: EventSource SDL.EventPayload
-                                     , getTickEvent :: EventSource Word32 }
+-- Project imports
+import SDL.Adapter
+import Model
+import Render
 
 
--- | SDL event
-sdlEvent :: SDLEventSource -> R.MomentIO (R.Event SDL.EventPayload)
-sdlEvent = R.fromAddHandler . addHandler . getSDLEvent
-
--- | SDL tick
-tickEvent :: SDLEventSource -> R.MomentIO (R.Event Word32)
-tickEvent = R.fromAddHandler .  addHandler . getTickEvent
-
-
-
--- Core SDL loop
-getSDLEventSource :: IO SDLEventSource
-getSDLEventSource = SDLEventSource <$> R.newAddHandler <*> R.newAddHandler
-
-fireSDLEvents :: SDLEventSource -> IO Bool
-fireSDLEvents source = do
-  let esdl = getSDLEvent source
-      etick = getTickEvent source
-
-      collectEvents :: IO (Maybe [SDL.EventPayload])
-      collectEvents = do
-        e <- SDL.pollEvent
-
-        case fmap SDL.eventPayload e of 
-          Just SDL.QuitEvent -> return Nothing
-          Nothing -> return $ Just []
-          Just event -> liftM (liftM (event:)) collectEvents
-
-  tick <- SDL.ticks
-  mEvents <- collectEvents
-  case mEvents of Nothing -> return False
-                  Just events -> do mapM (fire esdl) events
-                                    fire etick tick
-                                    return True
-
--- TODO how to multithread??
-sdlEventPump :: Word16 -> SDLEventSource -> IO ()
-sdlEventPump fps source = do
-  startTick <- SDL.ticks
-  shouldContinue <- fireSDLEvents source
-  endTick <- SDL.ticks
-
-  let ticks = fromIntegral $ endTick - startTick
-      secondsPerFrame = fromIntegral $ 1000 `div` fps
-
-  when (ticks < secondsPerFrame) $ SDL.delay(secondsPerFrame - ticks)
-  when shouldContinue $ sdlEventPump fps source
-
-
-renderRect :: Integral a => SDL.Point V2 a -> SDL.Renderer -> IO ()
-renderRect point renderer = do
-  SDL.fillRect renderer $ Just rect 
-    where rect = SDL.Rectangle point' size
-          point' = fromIntegral <$> point
-          size = V2 10 10
-
-renderHighlight :: Maybe (V2 Int) -> SDL.Renderer -> IO ()
-renderHighlight (Just cellCoord) renderer = do
-  let 
-    point = SDL.P $ gemBasePos cellCoord
-    size = V2 gemSize gemSize
-    rect = SDL.Rectangle point size
-    rect' = fromIntegral <$> rect
-
-  SDL.fillRect renderer $ Just rect'
-renderHighlight Nothing _ = pure ()
-
-renderCell :: SDL.Renderer -> GameMode -> ((Int, Int), BoardCell) -> IO ()
-renderCell renderer gameMode ((x, y), EmptyCell) = pure ()
-renderCell renderer gameMode ((x, y), GemCell gem) = do
-  let 
-    cellCoord = V2 x y
-    alpha' change animProgress = case change of
-                      VanishGems coords ->
-                        if any (==cellCoord) coords then -- TODO THIS IS SLOW!
-                          floor (255 * (max 0 $ 1 - animProgress))
-                        else 255
-                      _ -> 255
-    alpha = case gameMode of
-                Changing change animProgress -> alpha' change animProgress
-                Applying change -> alpha' change 1.0
-                _ -> 255
-
-    color = case gem of
-                Ruby -> V4 255 0 0 alpha
-                Sapphire -> V4 0 0 255 alpha
-                Emerald -> V4 0 255 0 alpha
-                Pearl -> V4 255 255 255 alpha
-                Amber -> V4 255 255 0 alpha
-
-    point = SDL.P $ gemPos gameMode cellCoord
-    size = (subtract 10) <$> V2 gemSize gemSize
-    rect = SDL.Rectangle point size
-    rect' = fromIntegral <$> rect
-
-  SDL.rendererDrawColor renderer SDL.$= color
-  SDL.fillRect renderer $ Just rect'
-
-gemBasePos :: CellCoords -> V2 Int -- these don't need to be the same type?
-gemBasePos cellCoord = ((cellCoord - V2 1 1) ^* gemSize) + (V2 offset offset)
-
-gemAnimPos :: BoardChange -> Float -> CellCoords -> V2 Int
-gemAnimPos (SwapGems left right) animProgress cellCoord
-  | left == cellCoord = round <$> (lerp animProgress rightPos leftPos)
-  | right == cellCoord = round <$> (lerp animProgress leftPos rightPos)
-  | otherwise = gemBasePos cellCoord
-  where leftPos = fromIntegral <$> (gemBasePos left) :: V2 Float
-        rightPos = fromIntegral <$> (gemBasePos right) :: V2 Float
-gemAnimPos (SettleGems settlements _) animProgress cellCoord
-  -- TODO VVV THIS IS SLOW VVV 
-  | isJust matchingSettlement = round <$> (lerp animProgress bottomPos topPos )
-  | otherwise = gemBasePos cellCoord
-  where coordBelow = cellCoord ^+^ (V2 0 $ fromMaybe 0 toFall)
-        topPos = fromIntegral <$> gemBasePos cellCoord
-        bottomPos = fromIntegral <$> gemBasePos coordBelow
-        toFall = snd <$> matchingSettlement
-        matchingSettlement = find (\(coord, _) -> coord == cellCoord) settlements
-gemAnimPos _ _ cellCoord = gemBasePos cellCoord
-
-gemPos :: GameMode -> CellCoords -> V2 Int
-gemPos (Changing change animProgress) cellCoord = gemAnimPos change animProgress cellCoord
-gemPos (Applying change) cellCoord = gemAnimPos change 1.0 cellCoord
-gemPos _ cellCoord = gemBasePos cellCoord
-
-
-drawDebugInfo :: SDL.Renderer -> SDL.Font.Font -> GameMode -> IO ()
-drawDebugInfo renderer font gameMode = do
-  let
-    modeText = case gameMode of
-      Inputting _ -> "Inputting"
-      Changing (SwapGems _ _) animProgress -> "Changing\nSwapGems\n" ++ show animProgress
-      Changing (VanishGems _) animProgress -> "Changing\nVanishGems\n" ++ show animProgress
-      Changing (SettleGems _ _) animProgress -> "Changing\nSettleGems\n" ++ show animProgress
-      Applying (SwapGems _ _) -> "Applying\nSwapGems"
-      Applying (VanishGems _) -> "Applying\nVanishGems"
-      Applying (SettleGems _ _) -> "Applying\nSettleGems"
-      Evaluating -> "Evaluating"
-
-    textColor = V4 128 255 128 255
-    textOrigin = SDL.P $ V2 0 0
-
-    -- Changing _ ticksLeft -> do
-    --   let ticksText = Text.pack $ show ticksLeft  
-
-  sdlText <- SDL.Font.blendedWrapped font textColor 150 $ Text.pack modeText
-  textTex <- SDL.createTextureFromSurface renderer sdlText 
-  textureInfo <- SDL.queryTexture textTex
-
-  let width = SDL.textureWidth textureInfo
-      height = SDL.textureHeight textureInfo
-
-  SDL.copy renderer textTex Nothing $ Just $ fromIntegral <$> (SDL.Rectangle textOrigin $ V2 width height)
-  
-
--- Rendering
-render :: SDL.Renderer -> SDL.Font.Font -> GameState -> IO ()
-render renderer font gameState = do
-  SDL.rendererDrawColor renderer SDL.$= V4 80 80 80 255
-  SDL.rendererDrawBlendMode renderer SDL.$= SDL.BlendAlphaBlend
-  SDL.clear renderer
-
-  let 
-    gameMode = mode gameState
-    drawInputState = case gameMode of -- TODO use Maybe/IO transformer?
-      Inputting (InputState mouseCoords selected highlight) -> do
-        SDL.rendererDrawColor renderer SDL.$= V4 128 128 128 255
-        renderHighlight highlight renderer
-
-        SDL.rendererDrawColor renderer SDL.$= V4 255 255 255 255
-        renderHighlight selected renderer
-      _ -> pure ()
-
-  drawInputState
-
-  sequence $ map (renderCell renderer gameMode) $ items $ board gameState
-
-  drawDebugInfo renderer font gameMode
-
-  -- SDL.rendererDrawColor renderer SDL.$= V4 255 0 255 255
-  -- renderRect (mouseCoords gameMode) renderer
-
-  SDL.present renderer
-
-----------
--- Game Structures
-----------
-
--- Board
-gemSize :: Int
-gemSize = 50
-
-offset :: Int
-offset = 50
-
-gridSize :: Int
-gridSize = 10
-
-inBounds :: CellCoords -> Bool
-inBounds (V2 x y) = (b x) && (b y) where b a = (a >= 1) && (a <=(gridSize))
-
-
-data Gem = Ruby | Sapphire | Emerald | Pearl | Amber
-  deriving (Eq, Ord)
-
-data BoardCell = EmptyCell | GemCell Gem
-  deriving (Eq, Ord)
-
-
-class Board a where
-  cell :: a -> (Int, Int) -> BoardCell
-  items :: a -> [((Int, Int), BoardCell)]
-  rowItems :: a -> [[((Int, Int), BoardCell)]]
-  colItems :: a -> [[((Int, Int), BoardCell)]]
-  changeCell :: BoardCell -> a -> (Int, Int) -> a
-
-
-newtype MatrixBoard = MatrixBoard (M.Matrix BoardCell)
-
-instance Board MatrixBoard where
-  cell (MatrixBoard m) coord = m M.! coord
-  items (MatrixBoard m) = M.toList $ M.mapPos (,) m
-  rowItems (MatrixBoard m) = M.toLists $ M.mapPos (,) m
-  colItems (MatrixBoard m) = M.toLists $ M.transpose $ M.mapPos (,) m
-  changeCell cell (MatrixBoard m) coords = MatrixBoard $ M.setElem cell coords m
-
-enumerate x = zip [0..] x
-
--- newtype VectorBoard = VectorBoard (Vector (Vector BoardCell))
-
--- instance Board VectorBoard where
---   cell (VectorBoard v) (x, y) = (v ! y) ! x
-
---   items (VectorBoard v) = [ ((x, y), c) 
---                | (y, row) <- enumerate (toList v)
---                , (x, c) <- enumerate (toList row) ]
-
---   changeCell (VectorBoard v) (x, y) cell = VectorBoard $ v // [(y, row)]
---     where row = (v ! y) // [(x, cell)]
-
-
-genBoard :: MatrixBoard
-genBoard = MatrixBoard m
-  where m = M.fromList gridSize gridSize $ repeat EmptyCell
 
 randomGems :: RandomGen g => Int -> g -> (g, [BoardCell])
 randomGems 0 random = (random, [])
@@ -304,36 +51,8 @@ randomGems count random = (random'', (intToGem cell):cells)
         intToGem _ = EmptyCell
 
 
-
-data BoardChange = 
-    SwapGems (CellCoords) (CellCoords)   -- coords of two gems to swap
-  | VanishGems [CellCoords]              -- list of gems to vanish
-  | SettleGems [(CellCoords, Int)] [BoardCell]-- gems to settle, by how much, new gems
-
-data InputState = InputState { mouseCoords :: SDL.Point V2 Int
-                             , highlighted :: Maybe (V2 Int)
-                             , selected :: Maybe (V2 Int)
-                             }
-
-
--- Game State
-data GameState = GameState 
-  { board :: MatrixBoard
-  , mode :: GameMode
-  }
-
--- TODO rename GamePhase?
-data GameMode = 
-  Inputting InputState
-  | Changing BoardChange Float
-  | Applying BoardChange
-  | Evaluating
-
-type CellCoords = V2 Int
-
-
-getHighlight :: SDL.Point V2 Int -> Maybe CellCoords
-getHighlight (SDL.P v) = 
+getHighlight :: V2 Int -> Maybe CellCoords
+getHighlight v = 
   let offsetV = V2 offset offset
       cellCoords' = (fromIntegral <$> (v ^-^ offsetV)) ^/ (fromIntegral gemSize) :: V2 Float
       cellCoords = ceiling <$> cellCoords'
@@ -432,12 +151,12 @@ main = do
   let 
     initialRandom = mkStdGen 0
     initialInputState = InputState 
-      { mouseCoords = SDL.P $ V2 0 0
+      { mouseCoords = V2 0 0
       , highlighted = Nothing
       , selected = Nothing
       }
     initialState = GameState 
-      { board = genBoard
+      { board = emptyBoard (10, 10)
       , mode = Evaluating
       }
 
@@ -493,9 +212,9 @@ main = do
           where extract (SDL.MouseMotionEvent e) = Just e
                 extract _ = Nothing
 
-        mouseMove :: Integral a => R.Event (SDL.Point V2 a)
+        mouseMove :: Integral a => R.Event (V2 a)
         mouseMove = R.filterJust $ mouseCoords <$> mouseMoveSDL
-          where mouseCoords (SDL.MouseMotionEventData _ _ _ point _) = Just (fromIntegral <$> point)
+          where mouseCoords (SDL.MouseMotionEventData _ _ _ (SDL.P point) _) = Just (fromIntegral <$> point)
 
 
         -- Logic
@@ -576,8 +295,6 @@ main = do
       -- Get a new list of random gems and a new generator
       let nextRandom _ (random, gems) = randomGems 10 random
       randomSource <- R.accumB (randomGems 10 initialRandom) $ nextRandom <$> tick
-
-      mousePosition <- R.stepper (SDL.P $ V2 0 0) mouseMove
 
       let
         renderEvent = render renderer font <$> gameState R.<@ tick
