@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: c01af08d0c87bb93879f8ee2388a36f498305bb1d45706ecea4eef4ab8c980e4
+-- hash: feaa20624a285ea1fc1656f36aabbb4f0a30e96bca728ddb45e4400af28cdb2e
 
 name:           frp-gems
 version:        0.1.0.0
@@ -34,6 +34,7 @@ library
       src
   build-depends:
       base >=4.7 && <5
+    , lens >=4.18.1 && <4.20
     , linear >=1.21.3 && <1.22
     , matrix >=0.3.6.1 && <0.3.7
     , random >=1.1 && <1.2
@@ -48,6 +49,7 @@ executable frp-gems-exe
   main-is: Main.hs
   other-modules:
       Model
+      Model.Lens
       Render
       SDL.Adapter
       Paths_frp_gems
@@ -57,6 +59,7 @@ executable frp-gems-exe
   build-depends:
       base >=4.7 && <5
     , frp-gems
+    , lens >=4.18.1 && <4.20
     , linear >=1.21.3 && <1.22
     , matrix >=0.3.6.1 && <0.3.7
     , random >=1.1 && <1.2
@@ -78,6 +81,7 @@ test-suite frp-gems-test
   build-depends:
       base >=4.7 && <5
     , frp-gems
+    , lens >=4.18.1 && <4.20
     , linear >=1.21.3 && <1.22
     , matrix >=0.3.6.1 && <0.3.7
     , random >=1.1 && <1.2

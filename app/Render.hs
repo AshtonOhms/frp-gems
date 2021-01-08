@@ -127,7 +127,7 @@ render renderer font gameState = do
   SDL.clear renderer
 
   let 
-    gameMode = mode gameState
+    gameMode = _mode gameState
     drawInputState = case gameMode of -- TODO use Maybe/IO transformer?
       Inputting (InputState mouseCoords selected highlight) -> do
         SDL.rendererDrawColor renderer SDL.$= V4 128 128 128 255
@@ -139,7 +139,7 @@ render renderer font gameState = do
 
   drawInputState
 
-  sequence $ map (renderCell renderer gameMode) $ items $ board gameState
+  sequence $ map (renderCell renderer gameMode) $ items $ _board gameState
 
   drawDebugInfo renderer font gameMode
 

@@ -28,6 +28,7 @@ dependencies:
 - matrix >= 0.3.6.1 && <0.3.7
 - vector >= 0.12.1.2 && < 0.12.2
 - random >= 1.1 && < 1.2
+- lens >= 4.18.1 && <4.20
 #- unordered-containers >= 0.2.13.0 && <0.2.14
 - reactive-banana
 

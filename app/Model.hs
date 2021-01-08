@@ -1,18 +1,4 @@
-module Model(
-    gemSize,
-    offset,
-    gridSize,
-    inBounds,
-    Gem (..),
-    BoardChange(..),
-    BoardCell (..),
-    GameState (..),
-    GameMode (..),
-    InputState (..),
-    CellCoords,
-    Board (..),
-    MatrixBoard
-  ) where
+module Model where
 
 import qualified Data.Matrix as M
 
@@ -65,12 +51,17 @@ instance Board MatrixBoard where
   emptyBoard (width, height) = MatrixBoard m
     where m = M.fromList width height $ repeat EmptyCell
 
+data BoardChange = 
+    SwapGems (CellCoords) (CellCoords)   -- coords of two gems to swap
+  | VanishGems [CellCoords]              -- list of gems to vanish
+  | SettleGems [(CellCoords, Int)] [BoardCell] -- gems to settle, by how much, new gems
 
--- Game State
-data GameState = GameState 
-  { board :: MatrixBoard
-  , mode :: GameMode
-  }
+data InputState = InputState { _mouseCoords :: V2 Int
+                             , _highlighted :: Maybe (V2 Int)
+                             , _selected :: Maybe (V2 Int)
+                             }
+
+
 
 -- TODO rename GamePhase?
 data GameMode = 
@@ -79,17 +70,8 @@ data GameMode =
   | Applying BoardChange
   | Evaluating
 
-data InputState = InputState { mouseCoords :: V2 Int
-                             , highlighted :: Maybe (V2 Int)
-                             , selected :: Maybe (V2 Int)
-                             }
-
-
-data BoardChange = 
-    SwapGems (CellCoords) (CellCoords)   -- coords of two gems to swap
-  | VanishGems [CellCoords]              -- list of gems to vanish
-  | SettleGems [(CellCoords, Int)] [BoardCell] -- gems to settle, by how much, new gems
-
-
-
-
+-- Game State
+data GameState = GameState 
+  { _board :: MatrixBoard
+  , _mode :: GameMode
+  }

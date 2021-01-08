@@ -17,10 +17,9 @@ import Linear
 import qualified SDL
 import qualified SDL.Font
 import qualified Data.Text as Text
+import Control.Lens
 import Data.List
 import Data.Maybe
-
---import Data.Vector hiding (map, mapM, zip, take, sequence, splitAt, concat) -- Todo qualify
 
 import System.Random
 import Data.Word
@@ -32,6 +31,7 @@ import qualified Reactive.Banana.Frameworks as R
 -- Project imports
 import SDL.Adapter
 import Model
+import qualified Model.Lens as L
 import Render
 
 
@@ -151,13 +151,13 @@ main = do
   let 
     initialRandom = mkStdGen 0
     initialInputState = InputState 
-      { mouseCoords = V2 0 0
-      , highlighted = Nothing
-      , selected = Nothing
+      { _mouseCoords = V2 0 0
+      , _highlighted = Nothing
+      , _selected = Nothing
       }
     initialState = GameState 
-      { board = emptyBoard (10, 10)
-      , mode = Evaluating
+      { _board = emptyBoard (10, 10)
+      , _mode = Evaluating
       }
 
     networkDescription :: SDLEventSource -> R.MomentIO ()
@@ -167,8 +167,8 @@ main = do
 
       let
         -- Behaviors derived from game state
-        gameMode = mode <$> gameState
-        boardB = board <$> gameState
+        gameMode = _mode <$> gameState
+        boardB = _board <$> gameState
         randomGemsB = snd <$> randomSource
 
         inputState :: R.Behavior (Maybe InputState)
@@ -225,7 +225,7 @@ main = do
           where isNewHighlight (Inputting (InputState _ highlight _)) highlight' = highlight /= highlight'
 
         -- When a highlighted cell is clicked
-        selectedE = R.filterJust $ highlighted <$> (R.filterJust $ inputState R.<@ mouseLeftDown)
+        selectedE = R.filterJust $ _highlighted <$> (R.filterJust $ inputState R.<@ mouseLeftDown)
 
         -- A swap can only occur when a block is selected and another is highlighted
         getSwap :: GameMode -> Maybe BoardChange
@@ -234,20 +234,12 @@ main = do
         -- Perform a swap
         swap =  R.filterJust $ getSwap <$> gameMode R.<@ R.whenE isInputting mouseLeftUp
 
-        -- Game State Updates TODO use lenses?
-        updateHighlight coords inputState = inputState { highlighted = coords } 
-        applyMouseUpdate point inputState = inputState { mouseCoords = point }
-        applySelected selected inputState = inputState { selected = Just selected }
-
         applyInputState :: (InputState -> InputState) -> GameState -> GameState
-        applyInputState f gameState = gameState { mode = Inputting inputState' }
-          where inputState' = case mode gameState of
+        applyInputState f gameState = gameState { _mode = Inputting inputState' }
+          where inputState' = case _mode gameState of
                                   Inputting inputState -> f inputState
 
-        applyChangingMode change gameState = gameState { mode = Changing change 0.0 }
-
-        applyGameMode :: GameMode -> GameState -> GameState
-        applyGameMode gameMode gameState = gameState { mode = gameMode }
+        applyChangingMode change gameState = gameState { _mode = Changing change 0.0 }
 
         -- The tick event for incrementing the change state
         -- TODO refactor: every state change triggers an event, every state change triggered by event
@@ -261,8 +253,8 @@ main = do
           where getChange (Applying change) = change
 
         applyBoardState board gameState = gameState { 
-                          board = board, 
-                          mode = Evaluating } -- todo split up??
+                          _board = board, 
+                          _mode = Evaluating } -- todo split up??
 
         evalTick = R.whenE isEvaluating tick
 
@@ -274,7 +266,7 @@ main = do
         gemsToSettleE = findGemsToSettle <$> (R.filterE hasEmptyCells $ boardB R.<@ evalTick)
         settleGemsE = ((flip SettleGems) <$> randomGemsB) R.<@> gemsToSettleE
 
-        resetInput _ gameState = gameState { mode = Inputting initialInputState }
+        resetInput _ gameState = gameState { _mode = Inputting initialInputState }
         resetInputE = R.filterE (not . hasEmptyCells) $ boardB R.<@ evalTick
 
       gameState <- R.accumB initialState $ 
@@ -285,11 +277,11 @@ main = do
                       , resetInput <$> resetInputE
                       , applyChangingMode <$> swap
                       , applyInputState <$> (R.whenE isInputting $ R.unions [
-                          applySelected <$> selectedE
-                        , applyMouseUpdate <$> mouseMove
-                        , updateHighlight <$> highlight
+                          (set L.selected) <$> Just <$> selectedE
+                        , (set L.mouseCoords) <$> mouseMove
+                        , (set L.highlighted) <$> highlight
                         ])
-                      , applyGameMode <$> updateChangingMode
+                      , (set L.mode) <$> updateChangingMode
                       ]
 
       -- Get a new list of random gems and a new generator
