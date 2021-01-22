@@ -30,6 +30,7 @@ import qualified Reactive.Banana.Frameworks as R
 
 -- Project imports
 import SDL.Adapter
+import qualified SDL.Lens as L
 import Model
 import qualified Model.Lens as L
 import Render
@@ -167,38 +168,23 @@ main = do
 
       let
         -- Behaviors derived from game state
-        gameMode = _mode <$> gameState
+        gameModeB = _mode <$> gameState
         boardB = _board <$> gameState
         randomGemsB = snd <$> randomSource
 
-        inputState :: R.Behavior (Maybe InputState)
-        inputState = maybeInputState <$> gameMode
-          where maybeInputState (Inputting inputState) = Just inputState
-                maybeInputState _ = Nothing
+        inputStateB = (preview L._Inputting) <$> gameModeB
 
-        isInputting = isState <$> gameMode
-          where isState (Inputting _) = True
-                isState _ = False
-
-        isChanging = isState <$> gameMode
-          where isState (Changing _ _) = True
-                isState _ = False
-
-        isApplying = isState <$> gameMode
-          where isState (Applying _) = True
-                isState _ = False
-
-        isEvaluating = isState <$> gameMode
-          where isState (Evaluating) = True
-                isState _ = False
+        isInputting = (has L._Inputting) <$> gameModeB
+        isChanging = (has L._Changing) <$> gameModeB
+        isApplying = (has L._Applying) <$> gameModeB
+        isEvaluating = (has L._Evaluating) <$> gameModeB
 
 
-        -- Mouse
-        mouseButtonSDL :: R.Event SDL.MouseButtonEventData
-        mouseButtonSDL = R.filterJust $ extract <$> current
-          where extract (SDL.MouseButtonEvent e) = Just e
-                extract _ = Nothing
+        -- Input events with SDL datatypes
+        mouseButtonSDL = R.filterJust $ (preview L._MouseButtonEvent) <$> current
+        mouseMoveSDL = R.filterJust $ (preview L._MouseMotionEvent) <$> current
 
+        -- Translated input events
         mouseLeftDown = R.filterE isLeftDown mouseButtonSDL
           where isLeftDown (SDL.MouseButtonEventData _ SDL.Pressed _ SDL.ButtonLeft _ _) = True
                 isLeftDown _ = False
@@ -207,11 +193,7 @@ main = do
           where isLeftUp (SDL.MouseButtonEventData _ SDL.Released _ SDL.ButtonLeft _ _) = True
                 isLeftUp _ = False
 
-        mouseMoveSDL :: R.Event SDL.MouseMotionEventData
-        mouseMoveSDL = R.filterJust $ extract <$> current
-          where extract (SDL.MouseMotionEvent e) = Just e
-                extract _ = Nothing
-
+        
         mouseMove :: Integral a => R.Event (V2 a)
         mouseMove = R.filterJust $ mouseCoords <$> mouseMoveSDL
           where mouseCoords (SDL.MouseMotionEventData _ _ _ (SDL.P point) _) = Just (fromIntegral <$> point)
@@ -220,36 +202,40 @@ main = do
         -- Logic
 
         -- When a cell is newly highlighted
-        highlight = R.filterApply (isNewHighlight <$> gameMode) 
+        highlight = R.filterApply (isNewHighlight <$> gameModeB) 
                       $ getHighlight <$> R.whenE isInputting mouseMove
           where isNewHighlight (Inputting (InputState _ highlight _)) highlight' = highlight /= highlight'
 
         -- When a highlighted cell is clicked
-        selectedE = R.filterJust $ _highlighted <$> (R.filterJust $ inputState R.<@ mouseLeftDown)
+        selectedE = R.filterJust $ _highlighted <$> (R.filterJust $ inputStateB R.<@ mouseLeftDown)
 
         -- A swap can only occur when a block is selected and another is highlighted
-        getSwap :: GameMode -> Maybe BoardChange
-        getSwap (Inputting (InputState _ h s)) = if h /= s then SwapGems <$> h <*> s else Nothing
+        getSwap :: InputState -> Maybe BoardChange
+        getSwap (InputState _ h s) = 
+          if h /= s then 
+            SwapGems <$> h <*> s 
+          else Nothing
 
         -- Perform a swap
-        swap =  R.filterJust $ getSwap <$> gameMode R.<@ R.whenE isInputting mouseLeftUp
+        swap =  R.filterJust $  
+           ((>>=getSwap) . preview L._Inputting) <$> (gameModeB R.<@ mouseLeftUp)
 
         applyInputState :: (InputState -> InputState) -> GameState -> GameState
         applyInputState f gameState = gameState { _mode = Inputting inputState' }
           where inputState' = case _mode gameState of
-                                  Inputting inputState -> f inputState
+                                  Inputting inputStateB -> f inputStateB
 
         applyChangingMode change gameState = gameState { _mode = Changing change 0.0 }
 
         -- The tick event for incrementing the change state
         -- TODO refactor: every state change triggers an event, every state change triggered by event
-        updateChangingMode = update <$> gameMode R.<@ R.whenE isChanging tick
+        updateChangingMode = update <$> gameModeB R.<@ R.whenE isChanging tick
           where update (Changing change animProgress)
                   | animProgress >= 1.0 = Applying change
                   | otherwise = Changing change $ animProgress + 0.1
 
         -- Triggers when updateChangingMode triggers with the Applying mode
-        newBoardStateE = (applyBoardChange <$> boardB) R.<@> (getChange <$> (gameMode R.<@ R.whenE isApplying tick))
+        newBoardStateE = (applyBoardChange <$> boardB) R.<@> (getChange <$> (gameModeB R.<@ R.whenE isApplying tick))
           where getChange (Applying change) = change
 
         applyBoardState board gameState = gameState { 
